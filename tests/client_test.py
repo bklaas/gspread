@@ -569,7 +569,7 @@ def _create_mock_error_response(status_code, error_dict=None, json_side_effect=N
     Args:
         status_code: HTTP status code
         error_dict: Error dictionary for JSON response (if parseable)
-        json_side_effect: Exception to raise when parsing JSON (for unparseable responses)
+        json_side_effect: Exception to raise when parsing JSON (for unparsable responses)
     """
     mock_response = Mock(spec=Response)
     mock_response.ok = False
@@ -577,7 +577,7 @@ def _create_mock_error_response(status_code, error_dict=None, json_side_effect=N
 
     if json_side_effect:
         mock_response.json.side_effect = json_side_effect
-        mock_response.text = "Unparseable response"
+        mock_response.text = "Unparsable response"
     elif error_dict:
         mock_response.json.return_value = {"error": error_dict}
 
@@ -622,10 +622,10 @@ def _test_backoff_retry_behavior(
                 ), f"Should not retry for error code {api_error.code}"
 
 
-def test_backoff_http_client_handles_unparseable_error_response(
+def test_backoff_http_client_handles_unparsable_error_response(
     backoff_client, mock_success_response
 ):
-    """Test that BackOffHTTPClient handles responses with unparseable JSON by falling back to response.status_code.
+    """Test that BackOffHTTPClient handles responses with unparsable JSON by falling back to response.status_code.
 
     This tests the fix in line 775 of http_client.py:
     code = err.code if err.code != -1 else err.response.status_code
@@ -633,15 +633,15 @@ def test_backoff_http_client_handles_unparseable_error_response(
     When APIError fails to parse JSON, it sets code=-1. The BackOffHTTPClient should
     use response.status_code instead for determining retry logic.
     """
-    # Create a mock response with unparseable JSON and a retryable status code (500)
+    # Create a mock response with unparsable JSON and a retryable status code (500)
     mock_response = _create_mock_error_response(
         status_code=500, json_side_effect=ValueError("Invalid JSON")
     )
 
     api_error = APIError(mock_response)
 
-    # Verify that the error code is -1 (due to unparseable JSON)
-    assert api_error.code == -1, "Error code should be -1 for unparseable JSON"
+    # Verify that the error code is -1 (due to unparsable JSON)
+    assert api_error.code == -1, "Error code should be -1 for unparsable JSON"
 
     # Test that it retries using response.status_code (500) instead of code (-1)
     _test_backoff_retry_behavior(
