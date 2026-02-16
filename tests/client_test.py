@@ -613,13 +613,13 @@ def _test_backoff_retry_behavior(
                 assert (
                     call_count >= 2
                 ), f"Should have retried for error code {api_error.code}"
-                assert result == mock_success_response  # nosec B101
+                assert result == mock_success_response
             else:
                 with pytest.raises(APIError):
                     backoff_client.request("get", "https://example.com/test")
                 assert (
                     call_count == 1
-                ), f"Should not retry for error code {api_error.code}"  # nosec B101
+                ), f"Should not retry for error code {api_error.code}"
 
 
 def test_backoff_http_client_handles_unparseable_error_response(
@@ -641,9 +641,7 @@ def test_backoff_http_client_handles_unparseable_error_response(
     api_error = APIError(mock_response)
 
     # Verify that the error code is -1 (due to unparseable JSON)
-    assert (
-        api_error.code == -1
-    ), "Error code should be -1 for unparseable JSON"  # nosec B101
+    assert api_error.code == -1, "Error code should be -1 for unparseable JSON"
 
     # Test that it retries using response.status_code (500) instead of code (-1)
     _test_backoff_retry_behavior(
@@ -662,7 +660,7 @@ def test_backoff_http_client_uses_error_code_when_valid(
     )
 
     api_error = APIError(mock_response)
-    assert api_error.code == 404, "Error code should be 404"  # nosec B101
+    assert api_error.code == 404, "Error code should be 404"
 
     # Test that it does NOT retry for non-retryable 404 error
     _test_backoff_retry_behavior(
@@ -685,7 +683,7 @@ def test_backoff_http_client_retries_with_valid_retryable_code(
     )
 
     api_error = APIError(mock_response)
-    assert api_error.code == 429, "Error code should be 429"  # nosec B101
+    assert api_error.code == 429, "Error code should be 429"
 
     # Test that it retries for retryable 429 error
     _test_backoff_retry_behavior(
