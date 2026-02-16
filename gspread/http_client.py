@@ -772,7 +772,7 @@ class BackOffHTTPClient(HTTPClient):
         try:
             return super().request(*args, **kwargs)
         except APIError as err:
-            code = err.code
+            code = err.code if err.code != -1 else err.response.status_code
             error = err.error
 
             self._NR_BACKOFF += 1

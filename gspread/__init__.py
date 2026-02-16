@@ -1,6 +1,6 @@
 """Google Spreadsheets Python API"""
 
-__version__ = "6.2.2rc1"
+__version__ = "6.2.2rc2"
 __author__ = "Anton Burnashev (bklaas fork)"
 
 

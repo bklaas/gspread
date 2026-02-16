@@ -1,5 +1,6 @@
 import time
 from typing import Generator
+from unittest.mock import Mock, patch
 
 import pytest
 from pytest import FixtureRequest
@@ -7,7 +8,8 @@ from requests import Response
 
 import gspread
 from gspread.client import Client
-from gspread.http_client import RETRYABLE_HTTP_CODES, SERVER_ERROR_THRESHOLD
+from gspread.exceptions import APIError
+from gspread.http_client import BackOffHTTPClient, RETRYABLE_HTTP_CODES, SERVER_ERROR_THRESHOLD
 from gspread.spreadsheet import Spreadsheet
 
 from .conftest import GspreadTest
@@ -536,3 +538,127 @@ class ClientTest(GspreadTest):
         # Make another request to ensure hooks don't interfere
         result2 = self.spreadsheet.fetch_sheet_metadata()
         self.assertIsNotNone(result2, "Second request should also succeed")
+
+
+# Standalone pytest tests for BackOffHTTPClient (not part of ClientTest class)
+
+
+@pytest.fixture
+def backoff_client():
+    """Create a BackOffHTTPClient with a mock session."""
+    mock_session = Mock()
+    return BackOffHTTPClient(auth=None, session=mock_session)
+
+
+@pytest.fixture
+def mock_success_response():
+    """Create a mock successful response."""
+    mock_response = Mock(spec=Response)
+    mock_response.ok = True
+    mock_response.status_code = 200
+    return mock_response
+
+
+def _create_mock_error_response(status_code, error_dict=None, json_side_effect=None):
+    """Helper to create a mock error response.
+
+    Args:
+        status_code: HTTP status code
+        error_dict: Error dictionary for JSON response (if parseable)
+        json_side_effect: Exception to raise when parsing JSON (for unparseable responses)
+    """
+    mock_response = Mock(spec=Response)
+    mock_response.ok = False
+    mock_response.status_code = status_code
+
+    if json_side_effect:
+        mock_response.json.side_effect = json_side_effect
+        mock_response.text = "Unparseable response"
+    elif error_dict:
+        mock_response.json.return_value = {"error": error_dict}
+
+    return mock_response
+
+
+def _test_backoff_retry_behavior(backoff_client, api_error, mock_success_response, should_retry):
+    """Helper to test retry behavior with consistent patterns.
+
+    Args:
+        backoff_client: BackOffHTTPClient instance
+        api_error: APIError to raise
+        mock_success_response: Response to return on success
+        should_retry: Whether the error should trigger retries
+    """
+    call_count = 0
+
+    def side_effect_fn(*_args, **_kwargs):
+        nonlocal call_count
+        call_count += 1
+        if should_retry and call_count >= 3:  # Succeed after 2 retries
+            return mock_success_response
+        raise api_error
+
+    with patch("time.sleep"):
+        with patch.object(BackOffHTTPClient.__bases__[0], "request", side_effect=side_effect_fn):
+            if should_retry:
+                result = backoff_client.request("get", "https://example.com/test")
+                assert call_count >= 2, f"Should have retried for error code {api_error.code}"
+                assert result == mock_success_response
+            else:
+                with pytest.raises(APIError):
+                    backoff_client.request("get", "https://example.com/test")
+                assert call_count == 1, f"Should not retry for error code {api_error.code}"
+
+
+def test_backoff_http_client_handles_unparseable_error_response(backoff_client, mock_success_response):
+    """Test that BackOffHTTPClient handles responses with unparseable JSON by falling back to response.status_code.
+
+    This tests the fix in line 775 of http_client.py:
+    code = err.code if err.code != -1 else err.response.status_code
+
+    When APIError fails to parse JSON, it sets code=-1. The BackOffHTTPClient should
+    use response.status_code instead for determining retry logic.
+    """
+    # Create a mock response with unparseable JSON and a retryable status code (500)
+    mock_response = _create_mock_error_response(
+        status_code=500,
+        json_side_effect=ValueError("Invalid JSON")
+    )
+
+    api_error = APIError(mock_response)
+
+    # Verify that the error code is -1 (due to unparseable JSON)
+    assert api_error.code == -1, "Error code should be -1 for unparseable JSON"
+
+    # Test that it retries using response.status_code (500) instead of code (-1)
+    _test_backoff_retry_behavior(backoff_client, api_error, mock_success_response, should_retry=True)
+
+
+def test_backoff_http_client_uses_error_code_when_valid(backoff_client, mock_success_response):
+    """Test that BackOffHTTPClient uses err.code when it's not -1."""
+    # Create a mock response with valid JSON and a non-retryable status code
+    mock_response = _create_mock_error_response(
+        status_code=404,
+        error_dict={"code": 404, "message": "Not found", "status": "NOT_FOUND"}
+    )
+
+    api_error = APIError(mock_response)
+    assert api_error.code == 404, "Error code should be 404"
+
+    # Test that it does NOT retry for non-retryable 404 error
+    _test_backoff_retry_behavior(backoff_client, api_error, mock_success_response, should_retry=False)
+
+
+def test_backoff_http_client_retries_with_valid_retryable_code(backoff_client, mock_success_response):
+    """Test that BackOffHTTPClient retries when err.code is a retryable error (e.g., 429, 500+)."""
+    # Create a mock response with valid JSON and a retryable status code (429)
+    mock_response = _create_mock_error_response(
+        status_code=429,
+        error_dict={"code": 429, "message": "Too many requests", "status": "RATE_LIMIT_EXCEEDED"}
+    )
+
+    api_error = APIError(mock_response)
+    assert api_error.code == 429, "Error code should be 429"
+
+    # Test that it retries for retryable 429 error
+    _test_backoff_retry_behavior(backoff_client, api_error, mock_success_response, should_retry=True)
