@@ -10,9 +10,9 @@ import gspread
 from gspread.client import Client
 from gspread.exceptions import APIError
 from gspread.http_client import (
-    BackOffHTTPClient,
     RETRYABLE_HTTP_CODES,
     SERVER_ERROR_THRESHOLD,
+    BackOffHTTPClient,
 )
 from gspread.spreadsheet import Spreadsheet
 
