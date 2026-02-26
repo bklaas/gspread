@@ -7,6 +7,7 @@ Google API.
 
 """
 
+import logging
 import time
 from http import HTTPStatus
 from typing import (
@@ -43,6 +44,8 @@ from .urls import (
     SPREADSHEET_VALUES_URL,
 )
 from .utils import ExportFormat, convert_credentials, quote
+
+logger = logging.getLogger(__name__)
 
 # Constants for retryable HTTP error codes
 RETRYABLE_HTTP_CODES = [
@@ -744,70 +747,51 @@ class BackOffHTTPClient(HTTPClient):
     _MAX_BACKOFF: int = 128  # arbitrary maximum backoff
 
     def request(self, *args: Any, **kwargs: Any) -> Response:
-        # Check if we should retry the request
-        def _should_retry(
-            code: int,
-            error: Mapping[str, Any],
-            wait: int,
-        ) -> bool:
-            # Drive API return a dict object 'errors', the sheet API does not
-            if "errors" in error:
-                # Drive API returns a code 403 when reaching quotas/usage limits
+
+        def _should_retry(code: int, error: Any, wait: int) -> bool:
+            if isinstance(error, dict) and "errors" in error:
                 if (
                     code == HTTPStatus.FORBIDDEN
-                    and error["errors"][0]["domain"] == "usageLimits"
+                    and error["errors"][0].get("domain") == "usageLimits"
                 ):
                     return True
 
-            # We retry if:
-            #   - the return code is one of:
-            #     - 429: too many requests
-            #     - 408: request timeout
-            #     - >= 500: some server error
-            #   - AND we did not reach the max retry limit
-            return (
-                code in self._HTTP_ERROR_CODES or code >= SERVER_ERROR_THRESHOLD
-            ) and wait <= self._MAX_BACKOFF
+            is_retryable_code = (
+                code in self._HTTP_ERROR_CODES
+                or code >= SERVER_ERROR_THRESHOLD
+                or code == -1
+            )
+
+            return is_retryable_code and wait <= self._MAX_BACKOFF
 
         try:
             return super().request(*args, **kwargs)
-        except APIError as err:
-            code = err.code if err.code != -1 else err.response.status_code
-            error = err.error
 
+        except Exception as err:
             self._NR_BACKOFF += 1
             wait = min(2**self._NR_BACKOFF, self._MAX_BACKOFF)
 
-            # check if error should retry
-            if _should_retry(code, error, wait) is True:
-                time.sleep(wait)
+            # Extract status code from the underlying response or the error object
+            response_obj = getattr(err, "response", None)
+            code = getattr(response_obj, "status_code", getattr(err, "code", -1))
+            error_data = getattr(err, "error", {})
 
-                # make the request again
+            if _should_retry(code, error_data, wait):
+                # This log will tell you exactly what's happening when the HTML hits
+                logger.warning(
+                    f"Request failed (Status: {code}). "
+                    f"Error type: {type(err).__name__}. "
+                    f"Retrying in {wait}s... (Attempt {self._NR_BACKOFF})"
+                )
+
+                time.sleep(wait)
                 response = self.request(*args, **kwargs)
 
-                # reset counters for next time
                 self._NR_BACKOFF = 0
-
                 return response
 
-            # failed too many times, raise APIEerror
-            raise err
-        except RefreshError as err:
-            self._NR_BACKOFF += 1
-            wait = min(2**self._NR_BACKOFF, self._MAX_BACKOFF)
-
-            if wait <= self._MAX_BACKOFF:
-                time.sleep(wait)
-
-                # make the request again
-                response = self.request(*args, **kwargs)
-
-                # reset counters for next time
-                self._NR_BACKOFF = 0
-
-                return response
-
-            # failed too many times, raise APIEerror
+            # If it's not retryable, log the final failure before raising
+            logger.error(f"Critical API failure: {err} (Status: {code})")
             raise err
 
 
