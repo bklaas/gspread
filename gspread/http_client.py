@@ -777,7 +777,7 @@ class BackOffHTTPClient(HTTPClient):
             error_data = getattr(err, "error", {})
 
             if _should_retry(code, error_data, wait):
-                # This log will tell you exactly what's happening when the HTML hits
+                # detailed log of error and retry attempt
                 logger.warning(
                     f"Request failed (Status: {code}). "
                     f"Error type: {type(err).__name__}. "
